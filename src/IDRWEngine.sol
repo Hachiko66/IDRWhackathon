@@ -18,6 +18,7 @@ contract IDRWEngine is Ownable {
     error IDRWEngine__BurnFailed();
     error IDRWEngine__NotAllowed();
     error IDRWEngine__MustBeMoreThanZero();
+    error IDRWEngine_InvalidPricefeed();
 
     IDRWStableCoin private immutable i_idrw;
     address private immutable i_weth;
@@ -72,16 +73,33 @@ contract IDRWEngine is Ownable {
     function mintIDRW(uint256 amount) external {
         if (amount == 0) revert IDRWEngine__MustBeMoreThanZero();
 
+        // Hitung total nilai kolateral pengguna
         uint256 totalCollateralValue = _getTotalCollateralValue(msg.sender);
+
+        // Hitung utang baru
         uint256 newDebt = debt[msg.sender] + amount;
+
+        // Hitung nilai kolateral minimum yang diperlukan
         uint256 minCollateralValue = (newDebt * COLLATERAL_RATIO) / 100;
 
+        // Pastikan nilai kolateral memenuhi rasio minimum
         if (totalCollateralValue < minCollateralValue) revert IDRWEngine__BreaksCollateralRatio();
 
+        // Update utang dan cetak IDRW
         debt[msg.sender] = newDebt;
         if (!i_idrw.mint(msg.sender, amount)) revert IDRWEngine__MintFailed();
-
         emit IDRWMinted(msg.sender, amount);
+    }
+
+    function getMaxMintableIDRW(address user) public view returns (uint256) {
+        uint256 totalCollateralValue = _getTotalCollateralValue(user);
+        uint256 currentDebt = debt[user];
+
+        // Hitung maksimal IDRW yang dapat dicetak
+        uint256 maxIDRW = (totalCollateralValue * 100) / COLLATERAL_RATIO;
+        if (maxIDRW <= currentDebt) return 0; // Tidak bisa mencetak lebih banyak
+
+        return maxIDRW - currentDebt;
     }
 
     function withdraw(address collateralToken, uint256 amount) external {
@@ -108,11 +126,14 @@ contract IDRWEngine is Ownable {
         if (amount == 0) revert IDRWEngine__MustBeMoreThanZero();
         if (debt[msg.sender] < amount) revert IDRWEngine__BurnFailed();
 
+        //pengurangan Hutang untuk memeriksa Ratio
+        uint256 simulatedDebt = debt[msg.sender] - amount;
+        uint256 totalCollateralValue = _getTotalCollateralValue(msg.sender);
+        uint256 minCollateralValue = (simulatedDebt * COLLATERAL_RATIO) / 100;
+        if (totalCollateralValue < minCollateralValue) revert IDRWEngine__BreaksCollateralRatio();
+
         debt[msg.sender] -= amount;
-        if (_getTotalCollateralValue(msg.sender) < (debt[msg.sender] * COLLATERAL_RATIO) / 100) {
-            debt[msg.sender] += amount; // Revert debt change
-            revert IDRWEngine__BreaksCollateralRatio();
-        }
+        emit IDRWRepaid(msg.sender, amount);
     }
 
     function switchCollateral(address fromCollateral, address toCollateral, uint256 amount) external {
@@ -121,19 +142,23 @@ contract IDRWEngine is Ownable {
         ) revert IDRWEngine__InvalidCollateral();
         if (amount == 0) revert IDRWEngine__MustBeMoreThanZero();
 
+        // Hitung nilai USD dari kolateral yang di-switch
         uint256 fromValue = _getCollateralValue(fromCollateral, amount);
         uint256 toAmount = _getCollateralAmount(toCollateral, fromValue);
 
+        // Kurangi saldo kolateral lama
         if (fromCollateral == i_weth) {
             if (ethCollateral[msg.sender] < amount) revert IDRWEngine__InsufficientCollateral();
             ethCollateral[msg.sender] -= amount;
+            IERC20(i_weth).safeTransfer(msg.sender, amount); // Kembalikan kolateral lama ke pengguna
         } else {
             if (btcCollateral[msg.sender] < amount) revert IDRWEngine__InsufficientCollateral();
             btcCollateral[msg.sender] -= amount;
+            IERC20(i_wbtc).safeTransfer(msg.sender, amount); // Kembalikan kolateral lama ke pengguna
         }
 
+        // Tambah saldo kolateral baru
         IERC20(toCollateral).safeTransferFrom(msg.sender, address(this), toAmount);
-
         if (toCollateral == i_weth) {
             ethCollateral[msg.sender] += toAmount;
         } else {
@@ -143,13 +168,14 @@ contract IDRWEngine is Ownable {
         emit CollateralSwitched(msg.sender, fromCollateral, toCollateral, amount);
     }
 
-    function _getTotalCollateralValue(address user) private view returns (uint256) {
+    function _getTotalCollateralValue(address user) public view returns (uint256) {
         return _getCollateralValue(i_weth, ethCollateral[user]) + _getCollateralValue(i_wbtc, btcCollateral[user]);
     }
 
-    function _getCollateralValue(address collateralToken, uint256 amount) private view returns (uint256) {
+    function _getCollateralValue(address collateralToken, uint256 amount) internal view returns (uint256) {
         AggregatorV3Interface priceFeed = collateralToken == i_weth ? i_ethPriceFeed : i_btcPriceFeed;
         (, int256 price,,,) = priceFeed.latestRoundData();
+        if (price <= 0) revert IDRWEngine_InvalidPricefeed();
         uint256 adjustedPrice = uint256(price) * 1e10; // Convert price to 18 decimals
 
         return (amount * adjustedPrice) / (10 ** (COLLATERAL_DECIMALS + PRICE_FEED_DECIMALS));

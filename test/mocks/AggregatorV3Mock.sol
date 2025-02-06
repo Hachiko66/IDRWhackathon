@@ -20,19 +20,13 @@ contract AggregatorV3Mock is AggregatorV3Interface {
         _latestPrice = newPrice;
     }
 
-    function getRoundData(uint80 /*roundId*/ )
-        external
-        view
-        override
-        returns (uint80, int256, uint256, uint256, uint80)
-    {
+    function getRoundData(uint80 /*roundId*/ ) external pure returns (uint80, int256, uint256, uint256, uint80) {
         revert("Not implemented in mock");
     }
 
     function latestRoundData()
         external
         view
-        override
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
         return (1, _latestPrice, block.timestamp, block.timestamp, 1);

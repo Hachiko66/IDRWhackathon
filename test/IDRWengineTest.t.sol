@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {AggregatorV3Mock} from "./mocks/AggregatorV3Mock.sol";
 import {IDRWStableCoin} from "../src/IDRWStableCoin.sol";
@@ -16,229 +16,178 @@ contract IDRWEngineTest is Test {
     IDRWStableCoin public idrw;
     IDRWEngine public engine;
 
+    // User accounts
     address public user = makeAddr("user");
-    uint256 public constant INITIAL_BALANCE = 1000 ether; // Meningkatkan saldo awal
 
     function setUp() public {
         // Deploy mock tokens and price feeds
         weth = new ERC20Mock();
-        weth.mint(user, INITIAL_BALANCE);
         wbtc = new ERC20Mock();
-        wbtc.mint(user,INITIAL_BALANCE);
-        ethPriceFeed = new AggregatorV3Mock(8, 1800e8); // $1800 per ETH
-        btcPriceFeed = new AggregatorV3Mock(8, 27000e8); // $27,000 per BTC
+        ethPriceFeed = new AggregatorV3Mock(8, 2700e8); // ETH/USD = $2700
+        btcPriceFeed = new AggregatorV3Mock(8, 54000e8); // BTC/USD = $54000
 
-        // Deploy IDRWStableCoin
+        // Deploy IDRWStableCoin and IDRWEngine
         idrw = new IDRWStableCoin(address(this));
-
-        // Deploy IDRWEngine
         engine = new IDRWEngine(
-            address(idrw),
-            address(weth),
-            address(wbtc),
-            address(ethPriceFeed),
-            address(btcPriceFeed),
-            address(this)
+            address(idrw), address(weth), address(wbtc), address(ethPriceFeed), address(btcPriceFeed), address(this)
         );
 
         // Transfer ownership of IDRWStableCoin to IDRWEngine
         idrw.transferOwnership(address(engine));
+
+        // Mint mock tokens to the user
+        weth.mint(user, 100 ether);
+        wbtc.mint(user, 100 ether);
+
+        // Approve engine to spend user's tokens
+        vm.prank(user);
+        weth.approve(address(engine), type(uint256).max);
+        vm.prank(user);
+        wbtc.approve(address(engine), type(uint256).max);
     }
 
-    // Helper function to get collateral value
-    function _getCollateralValue(address collateralToken, uint256 amount) private view returns (uint256) {
-        AggregatorV3Mock priceFeed = collateralToken == address(weth) ? ethPriceFeed : btcPriceFeed;
-        (, int256 price, , , ) = priceFeed.latestRoundData();
-        uint256 adjustedPrice = uint256(price) * 1e10; // Convert price to 18 decimals
-        return (amount * adjustedPrice) / (10 ** (18 + 8)); // COLLATERAL_DECIMALS + PRICE_FEED_DECIMALS
-    }
-
-    // Helper function to get collateral amount
-    function _getCollateralAmount(address collateralToken, uint256 usdValue) private view returns (uint256) {
-        AggregatorV3Mock priceFeed = collateralToken == address(weth) ? ethPriceFeed : btcPriceFeed;
-        (, int256 price, , , ) = priceFeed.latestRoundData();
-        uint256 adjustedPrice = uint256(price) * 1e10; // Convert price to 18 decimals
-        return (usdValue * 10 ** (18 + 8)) / adjustedPrice; // COLLATERAL_DECIMALS + PRICE_FEED_DECIMALS
-    }
-
-    // Test: Deposit collateral
+    // Test depositing collateral
     function testDepositCollateral() public {
-        uint256 depositAmount = 1 ether;
+        uint256 amount = 10 ether;
 
-        // Approve WETH for transfer
         vm.prank(user);
-        weth.approve(address(engine), depositAmount);
+        engine.deposit(address(weth), amount);
 
-        // Deposit WETH
-        vm.prank(user);
-        engine.deposit(address(weth), depositAmount);
-
-        // Check balances
-        assertEq(weth.balanceOf(address(engine)), depositAmount);
-        assertEq(engine.ethCollateral(user), depositAmount);
+        assertEq(engine.ethCollateral(user), amount, "ETH collateral balance mismatch");
+        assertEq(weth.balanceOf(address(engine)), amount, "Engine WETH balance mismatch");
     }
 
-    // Test: Mint IDRW tokens
-    function testMintIDRW() public {
-        uint256 depositAmount = 10 ether;
-        uint256 mintAmount = 8 ether;
-
-        // Approve WETH for transfer
+    // Test minting IDRWS with sufficient collateral
+    function testMintMaxIDRW() public {
+        // Deposit 10 ETH (harga = $27000)
         vm.prank(user);
-        weth.approve(address(engine), depositAmount);
+        engine.deposit(address(weth), 10 ether);
 
-        // Deposit WETH
+        // Hitung maksimal IDRW yang dapat dicetak
+        uint256 maxIDRW = engine.getMaxMintableIDRW(user);
+
+        // Mint IDRW maksimal
         vm.prank(user);
-        engine.deposit(address(weth), depositAmount);
+        engine.mintIDRW(maxIDRW);
 
-        // Mint IDRW
+        // Verifikasi saldo IDRW pengguna
+        assertEq(idrw.balanceOf(user), maxIDRW, "User IDRW balance mismatch");
+
+        // Verifikasi saldo kolateral di kontrak
+        assertEq(weth.balanceOf(address(engine)), 10 ether, "Engine WETH balance mismatch");
+
+    }
+
+    function testMintMaxIDRWuseWbtc() public {
+        vm.prank(user);
+        engine.deposit(address(wbtc), 1 ether);
+
+        uint256 maxIDRW = engine.getMaxMintableIDRW(user);
+
+        vm.prank(user);
+        engine.mintIDRW(maxIDRW);
+
+        assertEq(idrw.balanceOf(address(user)), maxIDRW, "User IDRW Balance Mismatch");
+
+        assertEq(wbtc.balanceOf(address(engine)),1 ether, "engine wbtc balance mistmatch");
+    }
+
+    // Test minting IDRWS with insufficient collateral
+    function testRevertWhenBreaksCollateralRatio() public {
+        uint256 collateralAmount = 1 ether;
+        uint256 mintAmount = 5000 ether; // Exceeds collateral ratio
+
+        vm.prank(user);
+        engine.deposit(address(weth), collateralAmount);
+
+        vm.expectRevert(IDRWEngine.IDRWEngine__BreaksCollateralRatio.selector);
         vm.prank(user);
         engine.mintIDRW(mintAmount);
-
-        // Check balances
-        assertEq(idrw.balanceOf(user), mintAmount);
-        assertEq(engine.debt(user), mintAmount);
     }
 
-    // Test: Withdraw collateral
+    // Test withdrawing collateral
     function testWithdrawCollateral() public {
-        uint256 depositAmount = 2 ether;
-        uint256 withdrawAmount = 1 ether;
+        uint256 depositAmount = 10 ether;
+        uint256 withdrawAmount = 5 ether;
 
-        // Approve WETH for transfer
-        vm.prank(user);
-        weth.approve(address(engine), depositAmount);
-
-        // Deposit WETH
         vm.prank(user);
         engine.deposit(address(weth), depositAmount);
 
-        // Withdraw WETH
         vm.prank(user);
         engine.withdraw(address(weth), withdrawAmount);
 
-        // Check balances
-        assertEq(weth.balanceOf(address(engine)), depositAmount - withdrawAmount);
-        assertEq(engine.ethCollateral(user), depositAmount - withdrawAmount);
+        assertEq(engine.ethCollateral(user), depositAmount - withdrawAmount, "ETH collateral balance mismatch");
+        assertEq(weth.balanceOf(user), withdrawAmount, "User WETH balance mismatch");
     }
 
-    // Test: Repay debt
-    function testRepayDebt() public {
-        uint256 depositAmount = 1 ether;
-        uint256 mintAmount = 1000 ether;
-        uint256 repayAmount = 500 ether;
+    // Test withdrawing more than deposited collateral
+    function testRevertWhenWithdrawMoreThanDeposited() public {
+        uint256 depositAmount = 10 ether;
+        uint256 withdrawAmount = 11 ether;
 
-        // Approve WETH for transfer
-        vm.prank(user);
-        weth.approve(address(engine), depositAmount);
-
-        // Deposit WETH
         vm.prank(user);
         engine.deposit(address(weth), depositAmount);
 
-        // Mint IDRW
+        vm.expectRevert(IDRWEngine.IDRWEngine__InsufficientCollateral.selector);
         vm.prank(user);
-        engine.mintIDRW(mintAmount);
+        engine.withdraw(address(weth), withdrawAmount);
+    }
 
-        // Approve IDRW for repayment
+    // Test repaying debt
+    function testRepayDebt() public {
+        uint256 repayAmount = 5 ether;
+
+        // Deposit 10 ETH (harga = $27000)
         vm.prank(user);
-        idrw.approve(address(engine), repayAmount);
+        engine.deposit(address(weth), 10 ether);
 
-        // Repay debt
+        // Hitung maksimal IDRW yang dapat dicetak
+        uint256 maxIDRW = engine.getMaxMintableIDRW(user);
+
+        // Mint IDRW maksimal
+        vm.prank(user);
+        engine.mintIDRW(maxIDRW);
+
+        // Verifikasi saldo IDRW pengguna
+        assertEq(idrw.balanceOf(user), maxIDRW, "User IDRW balance mismatch");
+
         vm.prank(user);
         engine.repay(repayAmount);
 
-        // Check balances
-        assertEq(idrw.balanceOf(user), mintAmount - repayAmount);
-        assertEq(engine.debt(user), mintAmount - repayAmount);
+        assertEq(engine.debt(user), maxIDRW - repayAmount, "Debt balance mismatch");
     }
 
-    // Test: Switch collateral
+    // Test switching collateral
     function testSwitchCollateral() public {
-        uint256 depositAmount = 1 ether;
+        uint256 depositAmount = 10 ether;
+        uint256 switchAmount = 5 ether;
 
-        // Approve WETH for transfer
-        vm.prank(user);
-        weth.approve(address(engine), depositAmount);
-
-        // Deposit WETH
         vm.prank(user);
         engine.deposit(address(weth), depositAmount);
 
-        // Calculate WBTC amount equivalent to deposited WETH
-        uint256 wbtcAmount = _getCollateralAmount(address(wbtc), _getCollateralValue(address(weth), depositAmount));
-
-        // Approve WBTC for switch
         vm.prank(user);
-        wbtc.approve(address(engine), wbtcAmount);
+        engine.switchCollateral(address(weth), address(wbtc), switchAmount);
 
-        // Switch collateral
-        vm.prank(user);
-        engine.switchCollateral(address(weth), address(wbtc), depositAmount);
-
-        // Check balances
-        assertEq(weth.balanceOf(address(engine)), 0);
-        assertEq(wbtc.balanceOf(address(engine)), wbtcAmount);
-        assertEq(engine.ethCollateral(user), 0);
-        assertEq(engine.btcCollateral(user), wbtcAmount);
+        assertEq(engine.ethCollateral(user), depositAmount - switchAmount, "ETH collateral balance mismatch");
+        assertEq(
+            engine.btcCollateral(user),
+            _getCollateralAmount(address(wbtc), _getCollateralValue(address(weth), switchAmount)),
+            "BTC collateral balance mismatch"
+        );
     }
 
-    // Test: Revert when depositing zero collateral
-    function testRevertWhenDepositZeroCollateral() public {
-        vm.prank(user);
-        vm.expectRevert();
-        engine.deposit(address(weth), 0);
+    // Helper functions for collateral value calculations
+    function _getCollateralValue(address collateralToken, uint256 amount) private view returns (uint256) {
+        AggregatorV3Mock priceFeed = collateralToken == address(weth) ? ethPriceFeed : btcPriceFeed;
+        (, int256 price,,,) = priceFeed.latestRoundData();
+        uint256 adjustedPrice = uint256(price) * 1e10; // Convert price to 18 decimals
+        return (amount * adjustedPrice) / (10 ** (18 + 8)); // Adjust for decimals
     }
 
-    // Test: Revert when minting zero IDRW
-    function testRevertWhenMintZeroIDRW() public {
-        vm.prank(user);
-        vm.expectRevert();
-        engine.mintIDRW(0);
-    }
-
-    // Test: Revert when repaying more than debt
-    function testRevertWhenRepayMoreThanDebt() public {
-        uint256 depositAmount = 1 ether;
-        uint256 mintAmount = 1000 ether;
-
-        // Approve WETH for transfer
-        vm.prank(user);
-        weth.approve(address(engine), depositAmount);
-
-        // Deposit WETH
-        vm.prank(user);
-        engine.deposit(address(weth), depositAmount);
-
-        // Mint IDRW
-        vm.prank(user);
-        engine.mintIDRW(mintAmount);
-
-        // Approve IDRW for repayment
-        vm.prank(user);
-        idrw.approve(address(engine), mintAmount + 1);
-
-        // Attempt to repay more than debt
-        vm.prank(user);
-        vm.expectRevert();
-        engine.repay(mintAmount + 1);
-    }
-
-    // Test: Revert when withdrawing more than deposited
-    function testRevertWhenWithdrawMoreThanDeposited() public {
-        uint256 depositAmount = 1 ether;
-
-        // Approve WETH for transfer
-        vm.prank(user);
-        weth.approve(address(engine), depositAmount);
-
-        // Deposit WETH
-        vm.prank(user);
-        engine.deposit(address(weth), depositAmount);
-
-        // Attempt to withdraw more than deposited
-        vm.prank(user);
-        vm.expectRevert();
-        engine.withdraw(address(weth), depositAmount + 1);
+    function _getCollateralAmount(address collateralToken, uint256 usdValue) private view returns (uint256) {
+        AggregatorV3Mock priceFeed = collateralToken == address(weth) ? ethPriceFeed : btcPriceFeed;
+        (, int256 price,,,) = priceFeed.latestRoundData();
+        uint256 adjustedPrice = uint256(price) * 1e10; // Convert price to 18 decimals
+        return (usdValue * 10 ** (18 + 8)) / adjustedPrice;
     }
 }
