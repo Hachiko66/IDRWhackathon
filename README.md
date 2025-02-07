@@ -1,66 +1,15 @@
-## Foundry
+an 1 test suite in 16.93ms (8.82ms CPU time): 25 tests passed, 0 failed, 0 skipped (25 total tests)
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
-
-Foundry consists of:
-
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
-
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
-```
-
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+╭---------------------------------+------------------+------------------+----------------+----------------╮
+| File                            | % Lines          | % Statements     | % Branches     | % Funcs        |
++=========================================================================================================+
+| src/IDRWEngine.sol              | 91.21% (83/91)   | 85.83% (103/120) | 50.00% (13/26) | 93.33% (14/15) |
+|---------------------------------+------------------+------------------+----------------+----------------|
+| src/IDRWStableCoin.sol          | 80.00% (16/20)   | 80.95% (17/21)   | 33.33% (2/6)   | 100.00% (3/3)  |
+|---------------------------------+------------------+------------------+----------------+----------------|
+| test/mocks/MockAggregatorV3.sol | 92.31% (12/13)   | 100.00% (6/6)    | 100.00% (0/0)  | 85.71% (6/7)   |
+|---------------------------------+------------------+------------------+----------------+----------------|
+| test/mocks/MockERC20.sol        | 100.00% (4/4)    | 100.00% (2/2)    | 100.00% (0/0)  | 100.00% (2/2)  |
+|---------------------------------+------------------+------------------+----------------+----------------|
+| Total                           | 89.84% (115/128) | 85.91% (128/149) | 46.88% (15/32) | 92.59% (25/27) |
+╰---------------------------------+------------------+------------------+----------------+----------------╯
