@@ -167,7 +167,7 @@ contract IDRWEngine is Ownable {
 
         emit CollateralSwitched(msg.sender, fromCollateral, toCollateral, amount);
     }
-
+    
     function _getTotalCollateralValue(address user) public view returns (uint256) {
         return _getCollateralValue(i_weth, ethCollateral[user]) + _getCollateralValue(i_wbtc, btcCollateral[user]);
     }
